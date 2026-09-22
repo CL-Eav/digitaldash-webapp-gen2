@@ -77,10 +77,10 @@ esp_err_t config_get_handler(httpd_req_t *req)
     return httpd_resp_send(req, json_data_input, HTTPD_RESP_USE_STRLEN);
 }
 
-esp_err_t config_patch_handler(httpd_req_t *req)
+// Shared body for both PATCH /api/config and its POST alias (see
+// config_post_handler doc comment below for why the alias exists).
+static esp_err_t config_update_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "PATCH /api/config requested");
-
     int total_len = req->content_len;
 
     int received = httpd_req_recv(req, json_data_output, MIN(total_len, JSON_BUF_SIZE));
@@ -114,6 +114,25 @@ esp_err_t config_patch_handler(httpd_req_t *req)
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
     return httpd_resp_send(req, success_response, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t config_patch_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "PATCH /api/config requested");
+    return config_update_handler(req);
+}
+
+// POST alias for config_patch_handler, doing an identical whole-document
+// replace. Added for HTTP clients that can't dispatch a PATCH request at
+// all - e.g. Qt 5.6's QML XMLHttpRequest (used by the Sync3 companion app,
+// see DigitalDash_Sync3/Sync_DigitalDash), which predates PATCH support in
+// QML XHR (added in Qt 5.9) and silently drops the request instead of
+// sending it. Safe to remove if that constraint ever goes away - nothing
+// else in this webapp depends on it.
+esp_err_t config_post_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "POST /api/config requested (PATCH alias)");
+    return config_update_handler(req);
 }
 
 esp_err_t config_handler_init_buffer(void)
@@ -157,6 +176,14 @@ esp_err_t register_config_routes(httpd_handle_t server)
         .handler = config_patch_handler,
         .user_ctx = NULL};
     httpd_register_uri_handler(server, &config_patch_uri);
+
+    // POST alias - see config_post_handler's doc comment above.
+    httpd_uri_t config_post_uri = {
+        .uri = "/api/config",
+        .method = HTTP_POST,
+        .handler = config_post_handler,
+        .user_ctx = NULL};
+    httpd_register_uri_handler(server, &config_post_uri);
 
     httpd_uri_t config_options_uri = {
         .uri = "/api/options",
