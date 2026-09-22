@@ -82,15 +82,39 @@ esp_err_t config_get_handler(httpd_req_t *req)
 static esp_err_t config_update_handler(httpd_req_t *req)
 {
     int total_len = req->content_len;
-
-    int received = httpd_req_recv(req, json_data_output, MIN(total_len, JSON_BUF_SIZE));
-    if (received <= 0)
+    if (total_len >= JSON_BUF_SIZE)
     {
-        ESP_LOGE(TAG, "Failed to receive config PATCH payload");
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
+        ESP_LOGE(TAG, "Config update payload too large (%d bytes)", total_len);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Payload too large");
     }
 
-    json_data_output[received] = '\0';
+    // httpd_req_recv() is a thin wrapper over recv() - it can return fewer
+    // bytes than asked for if the body arrives across multiple TCP segments,
+    // so a single call isn't guaranteed to capture the whole document. A
+    // browser's XHR/fetch stack tends to hand this off in one shot on a fast
+    // local connection, but Qt 5.6's embedded network stack (used by the
+    // Sync3 companion app's QML XHR) does not, which was silently truncating
+    // the JSON mid-document and forwarding garbage to the STM32 - explaining
+    // saves that reset the cluster but apply nothing (or only partially).
+    // Loop until the full content_len is read, per the standard ESP-IDF
+    // pattern for POST bodies.
+    int cur_len = 0;
+    while (cur_len < total_len)
+    {
+        int received = httpd_req_recv(req, json_data_output + cur_len, total_len - cur_len);
+        if (received <= 0)
+        {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT)
+            {
+                continue;
+            }
+            ESP_LOGE(TAG, "Failed to receive config update payload");
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
+        }
+        cur_len += received;
+    }
+
+    json_data_output[cur_len] = '\0';
     ESP_LOGD(TAG, "Received config update: %s", json_data_output);
 
     // Now save to STM
