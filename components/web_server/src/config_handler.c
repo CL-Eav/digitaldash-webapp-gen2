@@ -95,13 +95,18 @@ static esp_err_t config_update_handler(httpd_req_t *req)
 
     // Now save to STM
     Generate_TX_Message(get_stm32_comm(), KE_CONFIG_SEND, 0);
-    KE_wait_for_response(get_stm32_comm(), 2500);
+    KE_wait_for_response(get_stm32_comm(), 5000);
 
     // The config has been changed, invalidate cached json input data
     memset(json_data_input, '\0', JSON_BUF_SIZE);
 
     // Brute force hot-reload. This can be done better
-    vTaskDelay(pdMS_TO_TICKS(250));
+    // Widened from 250ms: this is the STM32's only window to finish
+    // persisting the whole document to flash before we yank its power via
+    // stm32_reset() below. 250ms was too tight for larger config writes -
+    // observed as a save that resets the cluster but only partially applies
+    // (e.g. PID field updates, theme field doesn't, or vice versa).
+    vTaskDelay(pdMS_TO_TICKS(2000));
     stm_gpio_splash_disable(true);
     stm32_reset();
 
